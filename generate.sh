@@ -6,12 +6,13 @@ set -euo pipefail
 # Version: 0.2.0
 # License: MIT
 # Creation Date: 09-04-2025
-# Last Modified: 09-04-2025
+# Last Modified: 10-04-2025
 # Usage: ./gen [pass|tkn|api] [OPTIONS]
 
 # Constants
 DEFAULT_PASSPHRASE_WORDS=4
 DEFAULT_API_TOKEN_BYTES=32
+DEFAULT_JWT_SECRET_BYTES=32 # Suitable for HS256
 WORD_LIST="/usr/share/dict/words" # Common path, might need adjustment on some systems
 
 # --- Flags ---
@@ -20,12 +21,13 @@ INCLUDE_UPPERCASE=false
 INCLUDE_LOWERCASE=false
 PASSPHRASE_WORD_COUNT=$DEFAULT_PASSPHRASE_WORDS
 API_TOKEN_BYTE_LENGTH=$DEFAULT_API_TOKEN_BYTES
+JWT_SECRET_BYTE_LENGTH=$DEFAULT_JWT_SECRET_BYTES
 # --- End Flags ---
 
 
 # ASCII Art
 print_ascii_art() {
-  cat << EOF
+  cat << EOF >&2
     ▗▄▄▖▗▄▄▄▖▗▖  ▗▖▗▄▄▄▖▗▄▄▖  ▗▄▖▗▄▄▄▖▗▄▄▄▖
    ▐▌   ▐▌   ▐▛▚▖▐▌▐▌   ▐▌ ▐▌▐▌ ▐▌ █  ▐▌   
    ▐▌▝▜▌▐▛▀▀▘▐▌ ▝▜▌▐▛▀▀▘▐▛▀▚▖▐▛▀▜▌ █  ▐▛▀▀▘
@@ -67,21 +69,21 @@ copy_to_clipboard() {
 # Help Function
 show_help() {
   cat << EOF
-Usage: $0 {pass|password|tkn|token|api|api_token} [OPTIONS]
+Usage: $0 {pass|password|tkn|token|api|api_token|secret} [OPTIONS]
 
 Generates passphrases, JWT-like tokens, or API keys.
 
 Commands:
   pass, password        Generate a human-readable passphrase.
-  tkn, token            Generate a JWT-like token string (fixed format).
+  secret                Generate a secure, Base64-encoded secret (e.g., for JWT signing).
   api, api_token        Generate an API token starting with 'sk-'.
 
 Options:
   -u, --uppercase       Capitalize first letter of each word (pass only).
   -l, --lowercase       Force words to lowercase (pass only).
-  -L, --length <num>    For 'pass': number of words (default: $DEFAULT_PASSPHRASE_WORDS).
-                        For 'api' : number of random bytes (default: $DEFAULT_API_TOKEN_BYTES).
-                        For 'tkn' : ignored.
+  -L, --length <num>    For 'pass' : number of words (default: $DEFAULT_PASSPHRASE_WORDS).
+                        For 'api'  : number of random bytes (default: $DEFAULT_API_TOKEN_BYTES).
+                        For 'secret': number of random bytes (default: $DEFAULT_JWT_SECRET_BYTES).
   -v, --verbose         Enable verbose debug output.
   -h, --help            Display this help message.
 
@@ -113,54 +115,78 @@ generate_passphrase() {
       exit 1
   fi
 
-  local words=()
-  log_debug "Generating passphrase with $PASSPHRASE_WORD_COUNT words."
-  for ((i = 0; i < PASSPHRASE_WORD_COUNT; i++)); do
+  log_debug "Generating passphrase with $PASSPHRASE_WORD_COUNT unique words."
+  
+  # Check if word list has enough unique potential words (considering case modification)
+  # This check is complex to do perfectly portably without knowing the final case.
+  # We'll rely on the retry mechanism, but add a safeguard.
+  local unique_word_count
+  unique_word_count=$(awk '{print $1}' "$WORD_LIST" | sort -u | wc -l) # Raw unique words
+  if (( unique_word_count < PASSPHRASE_WORD_COUNT )); then
+      echo "Warning: Dictionary might not contain enough unique words ($unique_word_count) for the requested count ($PASSPHRASE_WORD_COUNT), especially with case flags. Generation might be slow or fail." >&2
+      # Don't exit, let it try, but warn the user.
+  fi
+
+  local attempts=0
+  local max_attempts=$(( PASSPHRASE_WORD_COUNT * 100 )) # Safeguard against infinite loops
+
+  words=() # Initialize the array
+  local word_count=0 # Initialize word counter
+  local chosen_words_marker=$'\n' # Use newline delimiters for unique matching
+
+  # Loop using the counter instead of array size check
+  while [[ $word_count -lt $PASSPHRASE_WORD_COUNT ]]; do
+    ((attempts++))
+    if (( attempts > max_attempts )); then
+        echo "Error: Exceeded maximum attempts ($max_attempts) to find unique words. Check dictionary or requested length." >&2
+        exit 1
+    fi
+
+    local word
     word=$(get_random_word)
     # Handle potential empty lines or multi-word lines from dict
     word=$(echo "$word" | awk '{print $1}')
     if [[ -z "$word" ]]; then
-        ((i--)) # Retry if we got an empty word
-        continue
+        log_debug "Got empty word, retrying..."
+        continue # Retry if we got an empty word
     fi
 
+    # Apply case modification *first*
+    local modified_word="$word"
     if [[ $INCLUDE_UPPERCASE == true ]]; then
-      word=$(echo "$word" | awk '{print toupper(substr($0,1,1)) substr($0,2)}') # Portable capitalization
+      modified_word=$(echo "$word" | awk '{print toupper(substr($0,1,1)) substr($0,2)}') # Portable capitalization
     elif [[ $INCLUDE_LOWERCASE == true ]]; then
-      word=$(echo "$word" | tr '[:upper:]' '[:lower:]') # Portable lowercase
+      modified_word=$(echo "$word" | tr '[:upper:]' '[:lower:]') # Portable lowercase
     fi
-    words+=("$word")
-    log_debug "Added word: $word"
+
+    # Check if the *modified* word already exists using string matching
+    if [[ "$chosen_words_marker" == *$'
+'"$modified_word"$'
+'* ]]; then
+        log_debug "Modified word '$modified_word' (from raw '$word') already selected, retrying..."
+        continue # Retry if the modified form exists
+    fi
+
+    # If unique, add the modified word to the list and the marker string
+    words+=("$modified_word")
+    chosen_words_marker+="$modified_word"$'
+'
+    ((word_count++)) # Increment the counter
+    log_debug "Added unique modified word to list: $modified_word (Count: $word_count)"
   done
 
   local number
   number=$(printf "%02d" $((RANDOM % 100))) # Keep 2-digit number suffix
-  local result
-  result=$(printf "%s-" "${words[@]}")$number
-  printf "%s\n" "$result"
-  copy_to_clipboard "$result"
-}
+  local result="" # Initialize result string
 
-# Generate JWT-like token using openssl
-generate_token() {
-  log_debug "Generating JWT-like token."
-  local part1 part2 part3 raw_result temp_result final_result result
+  # Build the result string by iterating with the counter to avoid "${words[@]}"
+  local i
+  for (( i=0; i < word_count; i++ )); do
+      result+="${words[$i]}-"
+  done
 
-  # Generate URL-safe base64 strings directly
-  part1=$(openssl rand -base64 12 | tr '+/' '-_')
-  part2=$(openssl rand -base64 32 | tr '+/' '-_')
-  part3=$(openssl rand -base64 16 | tr '+/' '-_')
-
-  # Concatenate the parts first
-  raw_result="${part1}.${part2}.${part3}"
-
-  # Remove potential trailing padding character(s) from the combined string
-  # Use two steps with % to remove up to two trailing '=' signs
-  temp_result=${raw_result%=}   # Remove one trailing '=' if it exists
-  final_result=${temp_result%=} # Remove another trailing '=' if it exists
-
-  # Append exactly one '=' sign
-  result="${final_result}="
+  # Append the final number (handles case where word_count is 0)
+  result+="$number"
 
   printf "%s\n" "$result"
   copy_to_clipboard "$result"
@@ -178,7 +204,28 @@ generate_api_token() {
   copy_to_clipboard "$token"
 }
 
+# Generate a secure secret suitable for JWT signing (Base64 encoded)
+generate_jwt_secret() {
+  log_debug "Generating JWT secret with $JWT_SECRET_BYTE_LENGTH random bytes."
+  local secret
+  # Generate specified number of bytes and Base64 encode them
+  secret=$(openssl rand -base64 "$JWT_SECRET_BYTE_LENGTH")
+
+  printf "%s\n" "$secret"
+  copy_to_clipboard "$secret"
+}
+
 # --- Argument Parsing ---
+
+# Check for help flag *before* assuming the first arg is a command
+for arg in "$@"; do
+  if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+    show_help
+    exit 0
+  fi
+done
+
+# Now, proceed if no help flag was found
 if [[ $# -lt 1 ]]; then
   show_help
   exit 1
@@ -192,8 +239,10 @@ INCLUDE_UPPERCASE=false
 INCLUDE_LOWERCASE=false
 PASSPHRASE_WORD_COUNT=$DEFAULT_PASSPHRASE_WORDS
 API_TOKEN_BYTE_LENGTH=$DEFAULT_API_TOKEN_BYTES
+JWT_SECRET_BYTE_LENGTH=$DEFAULT_JWT_SECRET_BYTES
 LENGTH_FLAG_SET_PASS=false
 LENGTH_FLAG_SET_API=false
+LENGTH_FLAG_SET_SECRET=false
 
 
 while [[ $# -gt 0 ]]; do
@@ -216,8 +265,10 @@ while [[ $# -gt 0 ]]; do
       # We don't know the command yet, so set flags to check later
       PASSPHRASE_WORD_COUNT="$2"
       API_TOKEN_BYTE_LENGTH="$2"
+      JWT_SECRET_BYTE_LENGTH="$2"
       LENGTH_FLAG_SET_PASS=true
       LENGTH_FLAG_SET_API=true
+      LENGTH_FLAG_SET_SECRET=true
       log_debug "Length flag set to $2."
       shift 2 # Consume flag and value
       ;;
@@ -226,6 +277,8 @@ while [[ $# -gt 0 ]]; do
        shift
        ;;
     -h|--help)
+      # This case is technically redundant now but harmless to keep
+      # as the loop above handles it. We could remove it for cleanup.
       show_help
       exit 0
       ;;
@@ -252,8 +305,22 @@ if [[ "$COMMAND" == "pass" || "$COMMAND" == "password" ]]; then
   else
      log_debug "Using specified passphrase length: $PASSPHRASE_WORD_COUNT words."
   fi
-  # Reset API length if pass command is used and length was potentially set
-   if [[ "$LENGTH_FLAG_SET_API" = true && "$LENGTH_FLAG_SET_PASS" = true ]]; then
+  # Reset other lengths if pass command is used and length was potentially set
+   if [[ "$LENGTH_FLAG_SET_PASS" = true ]]; then
+       API_TOKEN_BYTE_LENGTH=$DEFAULT_API_TOKEN_BYTES
+       JWT_SECRET_BYTE_LENGTH=$DEFAULT_JWT_SECRET_BYTES
+   fi
+
+elif [[ "$COMMAND" == "secret" ]]; then
+  if [[ "$LENGTH_FLAG_SET_SECRET" = false ]]; then
+      JWT_SECRET_BYTE_LENGTH=$DEFAULT_JWT_SECRET_BYTES # Use default if -L wasn't used
+      log_debug "Using default JWT secret length: $JWT_SECRET_BYTE_LENGTH bytes."
+  else
+      log_debug "Using specified JWT secret length: $JWT_SECRET_BYTE_LENGTH bytes."
+  fi
+   # Reset other lengths if secret command is used and length was potentially set
+   if [[ "$LENGTH_FLAG_SET_SECRET" = true ]]; then
+       PASSPHRASE_WORD_COUNT=$DEFAULT_PASSPHRASE_WORDS
        API_TOKEN_BYTE_LENGTH=$DEFAULT_API_TOKEN_BYTES
    fi
 
@@ -264,13 +331,10 @@ elif [[ "$COMMAND" == "api" || "$COMMAND" == "api_token" ]]; then
   else
     log_debug "Using specified API token length: $API_TOKEN_BYTE_LENGTH bytes."
   fi
-   # Reset Pass length if api command is used and length was potentially set
-   if [[ "$LENGTH_FLAG_SET_API" = true && "$LENGTH_FLAG_SET_PASS" = true ]]; then
+   # Reset other lengths if api command is used and length was potentially set
+   if [[ "$LENGTH_FLAG_SET_API" = true ]]; then
        PASSPHRASE_WORD_COUNT=$DEFAULT_PASSPHRASE_WORDS
-   fi
-elif [[ "$COMMAND" == "tkn" || "$COMMAND" == "token" ]]; then
-   if [[ "$LENGTH_FLAG_SET_PASS" = true || "$LENGTH_FLAG_SET_API" = true ]]; then
-       log_debug "Ignoring --length flag for token command."
+       JWT_SECRET_BYTE_LENGTH=$DEFAULT_JWT_SECRET_BYTES
    fi
 fi
 
@@ -280,8 +344,8 @@ case "$COMMAND" in
   pass|password)
     generate_passphrase
     ;;
-  tkn|token)
-    generate_token
+  secret)
+    generate_jwt_secret
     ;;
   api|api_token)
     generate_api_token
