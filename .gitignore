@@ -1,0 +1,8 @@
+# Ignore everything
+*
+
+# Exclude the current files
+!.gitignore
+!generate.sh
+!LICENSE
+!README.md
