@@ -88,8 +88,6 @@ Options:
   -h, --help            Display this help message.
 
 Clipboard: Attempts to copy the generated value to the clipboard using pbcopy (macOS) or xclip/xsel (Linux).
-
-Tip: Create a symlink like 'ln -s \$(pwd)/generate.sh /usr/local/bin/gen' to use this globally.
 EOF
 }
 
