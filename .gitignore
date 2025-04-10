@@ -6,4 +6,5 @@
 !generate.sh
 !LICENSE
 !README.md
-!tests/test_generate.sh
+!/tests/
+!/tests/test_generate.sh
