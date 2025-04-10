@@ -26,7 +26,7 @@ A Bash script that generates password strings, JWT tokens and API keys.
 1. Clone the repository: `git clonehttps://github.com/beecave-homelab/generate.git`
 2. Navigate to the directory: `cd generate`
 3. Make the script executable: `chmod +x generate.sh`
-4. Optionally, create a symlink to use the script globally: `ln -s $(pwd)/generate.sh /usr/local/bin/gen`
+4. Optionally, copy the script into the `/usr/local/bin/` directory:  `sudo cp generate.sh /usr/local/bin/generate`
 
 ## Usage
 
