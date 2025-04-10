@@ -125,9 +125,9 @@ generate_passphrase() {
     fi
 
     if [[ $INCLUDE_UPPERCASE == true ]]; then
-      word="${word^}" # Capitalize first letter
+      word=$(echo "$word" | awk '{print toupper(substr($0,1,1)) substr($0,2)}') # Portable capitalization
     elif [[ $INCLUDE_LOWERCASE == true ]]; then
-      word="${word,,}" # Force lowercase
+      word=$(echo "$word" | tr '[:upper:]' '[:lower:]') # Portable lowercase
     fi
     words+=("$word")
     log_debug "Added word: $word"
