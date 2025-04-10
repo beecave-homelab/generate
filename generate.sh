@@ -71,7 +71,7 @@ show_help() {
   cat << EOF
 Usage: $0 {pass|password|secret|api|api_token} [OPTIONS]
 
-Generates passphrases, JWT-like tokens, or API keys.
+Generates passphrases, JWT secrets, or API keys.
 
 Commands:
   pass, password        Generate a human-readable passphrase.
