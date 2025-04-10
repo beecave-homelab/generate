@@ -69,7 +69,7 @@ copy_to_clipboard() {
 # Help Function
 show_help() {
   cat << EOF
-Usage: $0 {pass|password|tkn|token|api|api_token|secret} [OPTIONS]
+Usage: $0 {pass|password|secret|api|api_token} [OPTIONS]
 
 Generates passphrases, JWT-like tokens, or API keys.
 
