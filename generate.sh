@@ -238,7 +238,7 @@ generate_passphrase() {
 
       # Apply case modification (variables passed via -v)
       if (upper == "true") {
-        word = toupper(substr(word,1,1)) substr(word,2)
+        word = toupper(substr(word,1,1)) tolower(substr(word,2))
       } else if (lower == "true") {
         word = tolower(word)
       }
