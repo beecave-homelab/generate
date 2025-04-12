@@ -120,9 +120,9 @@ fi
 # --- Test Cases ---
 
 # Help and Usage
-run_test "Help flag (-h)" 0 "$SCRIPT_UNDER_TEST" -h && assert_output_matches "Usage:.*generate.sh.*{pass\|password\|secret\|api\|api_token}"
-run_test "Help flag (--help)" 0 "$SCRIPT_UNDER_TEST" --help && assert_output_matches "Usage:.*generate.sh.*{pass\|password\|secret\|api\|api_token}"
-run_test "No arguments shows help" 1 "$SCRIPT_UNDER_TEST" && assert_output_matches "Usage:.*generate.sh.*{pass\|password\|secret\|api\|api_token}" # Should exit 1 and show help
+run_test "Help flag (-h)" 0 "$SCRIPT_UNDER_TEST" -h && assert_output_matches "^Usage: \./generate\.sh.*(pass|password|secret|api|api_token)"
+run_test "Help flag (--help)" 0 "$SCRIPT_UNDER_TEST" --help && assert_output_matches "^Usage: \./generate\.sh.*(pass|password|secret|api|api_token)"
+run_test "No arguments shows help" 1 "$SCRIPT_UNDER_TEST" && assert_output_matches "^Usage: \./generate\.sh.*(pass|password|secret|api|api_token)" # Should exit 1 and show help
 run_test "Invalid command" 1 "$SCRIPT_UNDER_TEST" invalid_command && assert_stderr_contains "Invalid command: invalid_command"
 run_test "Unknown option" 1 "$SCRIPT_UNDER_TEST" pass --unknown-option && assert_stderr_contains "Unknown option: --unknown-option"
 
