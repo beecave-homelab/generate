@@ -16,15 +16,13 @@ DEFAULT_JWT_SECRET_BYTES=32 # Suitable for HS256
 DEFAULT_WORD_LIST="/usr/share/dict/words" # Common path, might need adjustment on some systems
 WORD_LIST="${WORD_LIST:-$DEFAULT_WORD_LIST}" # Use environment var if set and non-empty, otherwise use default
 
-# --- Flags ---
+# Flags
 VERBOSE=false
 INCLUDE_UPPERCASE=false
 INCLUDE_LOWERCASE=false
 PASSPHRASE_WORD_COUNT=$DEFAULT_PASSPHRASE_WORDS
 API_TOKEN_BYTE_LENGTH=$DEFAULT_API_TOKEN_BYTES
 JWT_SECRET_BYTE_LENGTH=$DEFAULT_JWT_SECRET_BYTES
-# --- End Flags ---
-
 
 # ASCII Art
 print_ascii_art() {
