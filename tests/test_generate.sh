@@ -120,9 +120,9 @@ fi
 # --- Test Cases ---
 
 # Help and Usage
-run_test "Help flag (-h)" 0 "$SCRIPT_UNDER_TEST" -h && assert_output_matches "Usage:.*generate.sh.*{pass\|password\|tkn\|token\|api\|api_token\|secret}"
-run_test "Help flag (--help)" 0 "$SCRIPT_UNDER_TEST" --help && assert_output_matches "Usage:.*generate.sh.*{pass\|password\|tkn\|token\|api\|api_token\|secret}"
-run_test "No arguments shows help" 1 "$SCRIPT_UNDER_TEST" && assert_output_matches "Usage:.*generate.sh.*{pass\|password\|tkn\|token\|api\|api_token\|secret}" # Should exit 1 and show help
+run_test "Help flag (-h)" 0 "$SCRIPT_UNDER_TEST" -h && assert_output_matches "Usage:.*generate.sh.*{pass\|password\|secret\|api\|api_token}"
+run_test "Help flag (--help)" 0 "$SCRIPT_UNDER_TEST" --help && assert_output_matches "Usage:.*generate.sh.*{pass\|password\|secret\|api\|api_token}"
+run_test "No arguments shows help" 1 "$SCRIPT_UNDER_TEST" && assert_output_matches "Usage:.*generate.sh.*{pass\|password\|secret\|api\|api_token}" # Should exit 1 and show help
 run_test "Invalid command" 1 "$SCRIPT_UNDER_TEST" invalid_command && assert_stderr_contains "Invalid command: invalid_command"
 run_test "Unknown option" 1 "$SCRIPT_UNDER_TEST" pass --unknown-option && assert_stderr_contains "Unknown option: --unknown-option"
 
@@ -137,6 +137,7 @@ run_test "Passphrase verbose (-v)" 0 "$SCRIPT_UNDER_TEST" pass -v && assert_stde
 run_test "Passphrase uppercase and lowercase error" 1 "$SCRIPT_UNDER_TEST" pass -u -l && assert_stderr_contains "Error: Cannot use --uppercase and --lowercase flags together"
 run_test "Passphrase invalid length (non-numeric)" 1 "$SCRIPT_UNDER_TEST" pass -L abc && assert_stderr_contains "Error: --length requires a numeric value"
 run_test "Passphrase invalid length (negative - although caught by regex)" 1 "$SCRIPT_UNDER_TEST" pass -L -5 && assert_stderr_contains "Error: --length requires a numeric value" # Script uses simple regex ^[0-9]+$
+run_test "Passphrase error with non-existent word list" 1 env WORD_LIST=/dev/null/nonexistent "$SCRIPT_UNDER_TEST" pass && assert_stderr_contains "Error: Word list not found"
 
 # Secret Generation (secret)
 # Note: Checking exact Base64 length is tricky due to padding. We check it's non-empty and looks like Base64.
@@ -144,6 +145,7 @@ DEFAULT_SECRET_B64_LEN=$(echo $(( (4 * 32 / 3) ))) # Approx length for 32 bytes
 CUSTOM_SECRET_B64_LEN=$(echo $(( (4 * 16 / 3) ))) # Approx length for 16 bytes
 run_test "Default secret" 0 "$SCRIPT_UNDER_TEST" secret && assert_output_matches "^[A-Za-z0-9+/=]+$" "Secret format: Base64"
 run_test "Secret custom length (-L 16)" 0 "$SCRIPT_UNDER_TEST" secret -L 16 && assert_output_matches "^[A-Za-z0-9+/=]+$" "Secret format: Base64 (16 bytes)"
+run_test "Secret custom length (--length 16)" 0 "$SCRIPT_UNDER_TEST" secret --length 16 && assert_output_matches "^[A-Za-z0-9+/=]+$" "Secret format: Base64 (16 bytes)"
 run_test "Secret verbose (-v)" 0 "$SCRIPT_UNDER_TEST" secret -v && assert_stderr_contains "[DEBUG] Generating JWT secret"
 run_test "Secret invalid length (non-numeric)" 1 "$SCRIPT_UNDER_TEST" secret -L abc && assert_stderr_contains "Error: --length requires a numeric value"
 
@@ -155,6 +157,7 @@ CUSTOM_API_B64_LEN=$(echo $(( (4 * 16 / 3) ))) # Approx length for 16 bytes
 run_test "Default API token (api)" 0 "$SCRIPT_UNDER_TEST" api && assert_output_matches "^sk-[A-Za-z0-9_-]+$" "API token format: sk- followed by Base64URL"
 run_test "Default API token (api_token)" 0 "$SCRIPT_UNDER_TEST" api_token && assert_output_matches "^sk-[A-Za-z0-9_-]+$" "API token format: sk- followed by Base64URL"
 run_test "API token custom length (-L 16)" 0 "$SCRIPT_UNDER_TEST" api -L 16 && assert_output_matches "^sk-[A-Za-z0-9_-]+$" "API token format: sk- (16 bytes)"
+run_test "API token custom length (--length 16)" 0 "$SCRIPT_UNDER_TEST" api --length 16 && assert_output_matches "^sk-[A-Za-z0-9_-]+$" "API token format: sk- (16 bytes)"
 run_test "API token verbose (-v)" 0 "$SCRIPT_UNDER_TEST" api -v && assert_stderr_contains "[DEBUG] Generating API token"
 run_test "API token invalid length (non-numeric)" 1 "$SCRIPT_UNDER_TEST" api -L xyz && assert_stderr_contains "Error: --length requires a numeric value"
 
@@ -169,6 +172,11 @@ run_test "Length flag applies to api, not default pass" 0 "$SCRIPT_UNDER_TEST" a
 # Now run pass without -L, should use default words (4)
 run_test "Passphrase uses default length after api used -L" 0 "$SCRIPT_UNDER_TEST" pass && assert_output_matches "^[[:alpha:]]+(-[[:alpha:]]+){3}-[0-9]{2}$" "Passphrase format: 4 words"
 
+run_test "Length flag applies to secret, not default pass" 0 "$SCRIPT_UNDER_TEST" secret -L 16 && assert_output_matches "^[A-Za-z0-9+/=]+$"
+run_test "Passphrase uses default length after secret used -L" 0 "$SCRIPT_UNDER_TEST" pass && assert_output_matches "^[[:alpha:]]+(-[[:alpha:]]+){3}-[0-9]{2}$" "Passphrase format: 4 words"
+
+run_test "Length flag applies to secret, not default api" 0 "$SCRIPT_UNDER_TEST" secret -L 16 && assert_output_matches "^[A-Za-z0-9+/=]+$"
+run_test "API uses default length after secret used -L" 0 "$SCRIPT_UNDER_TEST" api && assert_output_matches "^sk-[A-Za-z0-9_-]+$"
 
 # --- Test Summary ---
 echo "--------------------"
