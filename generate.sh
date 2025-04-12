@@ -3,17 +3,18 @@ set -euo pipefail
 
 # Script Description: Generates passphrases, JWT tokens, or API keys with selectable formatting.
 # Author: elvee
-# Version: 0.2.0
+# Version: 0.2.1
 # License: MIT
 # Creation Date: 09-04-2025
-# Last Modified: 10-04-2025
+# Last Modified: 12-04-2025
 # Usage: ./gen [pass|tkn|api] [OPTIONS]
 
 # Constants
 DEFAULT_PASSPHRASE_WORDS=4
 DEFAULT_API_TOKEN_BYTES=32
 DEFAULT_JWT_SECRET_BYTES=32 # Suitable for HS256
-WORD_LIST="/usr/share/dict/words" # Common path, might need adjustment on some systems
+DEFAULT_WORD_LIST="/usr/share/dict/words" # Common path, might need adjustment on some systems
+WORD_LIST="${WORD_LIST:-$DEFAULT_WORD_LIST}" # Use environment var if set and non-empty, otherwise use default
 
 # --- Flags ---
 VERBOSE=false
@@ -46,6 +47,7 @@ log_debug() {
 # Clipboard Copy Function
 copy_to_clipboard() {
     local input="$1"
+    log_debug "--- Entered copy_to_clipboard ---"
     local clipboard_cmd=""
 
     # Detect clipboard command
@@ -58,10 +60,64 @@ copy_to_clipboard() {
     fi
 
     if [[ -n "$clipboard_cmd" ]]; then
-        printf "%s" "$input" | $clipboard_cmd
-        log_debug "Result copied to clipboard using $clipboard_cmd."
+        log_debug "Detected clipboard command: '$clipboard_cmd'"
+        # Attempt to copy, capturing stderr via a temporary file
+        local error_output=""
+        local exit_status=0
+        local error_file
+        error_file=$(mktemp) # Create a temporary file
+
+        log_debug "Checking for timeout command..."
+        local timeout_cmd=""
+        if command -v timeout &> /dev/null; then
+            log_debug "timeout command found."
+            timeout_cmd="timeout 1s " # Add a space at the end
+        else
+            log_debug "timeout command not found. Proceeding without timeout."
+        fi
+
+        log_debug "Attempting clipboard command (stderr to $error_file)..."
+        # Wrap command in timeout if available, use sh -c for pipeline, redirect stdout to null, stderr to temp file
+        # Temporarily disable exit on error (-e) for the timeout command
+        set +e
+        # Use ${timeout_cmd:-} which expands to nothing if timeout_cmd is empty
+        ${timeout_cmd:-}sh -c "printf '%s' \"$input\" | $clipboard_cmd > /dev/null" 2> "$error_file"
+        exit_status=$? # Capture exit status immediately
+        set -e # Re-enable exit on error
+
+        log_debug "Clipboard command finished. Exit status: $exit_status"
+
+        # Read any error output from the temp file
+        if [[ -s "$error_file" ]]; then # Check if error file is not empty
+           error_output=$(<"$error_file")
+           log_debug "Captured error output: $error_output"
+        fi
+
+        rm -f "$error_file" # Clean up the temporary file
+
+        # Logic to handle exit status and error
+        if [[ $exit_status -eq 0 ]]; then
+            # Success
+            if [[ "$VERBOSE" == true ]]; then
+              log_debug "Result copied to clipboard using '$clipboard_cmd'."
+            fi
+        else
+            # Failure or Timeout
+            echo "Warning: Failed to copy to clipboard. Please copy the output manually." >&2
+            if [[ "$VERBOSE" == true ]]; then
+              if [[ $exit_status -eq 124 ]]; then
+                 log_debug "Clipboard command '$clipboard_cmd' timed out (likely hung)."
+              else
+                 log_debug "Clipboard command '$clipboard_cmd' failed with exit status $exit_status. Error: $error_output"
+              fi
+            fi
+        fi
     else
-        log_debug "No clipboard command (pbcopy, xclip, xsel) found. Cannot copy to clipboard."
+      log_debug "No clipboard command detected."
+      # Only log missing command if verbose mode is on (This check is slightly redundant now but kept for clarity)
+       if [[ "$VERBOSE" == true ]]; then
+         log_debug "No clipboard command (pbcopy, xclip, xsel) found. Cannot copy to clipboard."
+       fi
     fi
 }
 
@@ -93,12 +149,33 @@ EOF
 
 # Select random word from dictionary (uses shuf if available, falls back to awk)
 get_random_word() {
+  local word=""
   if command -v shuf &> /dev/null; then
-    shuf -n 1 "$WORD_LIST"
-  else
-    log_debug "shuf not found, using awk fallback (slower)."
-    awk 'BEGIN {srand();} { lines[NR]=$0 } END { print lines[int(rand()*NR)+1] }' "$WORD_LIST"
+    # Try shuf, capture potential errors
+    log_debug "get_random_word: Found shuf, attempting: shuf -n 1 '$WORD_LIST'"
+    word=$(shuf -n 1 "$WORD_LIST" 2>/dev/null)
+    log_debug "get_random_word: shuf command finished. Result: '$word'"
+    if [[ -z "$word" ]]; then
+        log_debug "shuf returned empty, potentially an issue with dictionary or shuf itself."
+        # Optionally fall back to awk here if shuf consistently fails
+    fi
   fi
+
+  # If shuf wasn't found or failed, use awk
+  if [[ -z "$word" ]] && ! command -v shuf &> /dev/null; then
+     log_debug "shuf not found or failed, using awk fallback (slower)."
+     # Ensure awk doesn't hang on empty input/errors
+     word=$(awk 'BEGIN {srand();} { lines[NR]=$0 } END { if (NR > 0) print lines[int(rand()*NR)+1]; else print "" }' "$WORD_LIST" 2>/dev/null)
+     if [[ -z "$word" ]]; then
+         log_debug "awk fallback also returned empty."
+     fi
+  elif [[ -z "$word" ]]; then
+      log_debug "shuf returned empty, not attempting awk fallback as shuf exists."
+      # Policy: Return empty string if shuf exists but failed.
+      echo "" # Return empty string
+      return
+  fi
+  echo "$word" # Return the potentially multi-word line
 }
 
 # Generate random words for passphrase
@@ -113,93 +190,121 @@ generate_passphrase() {
       exit 1
   fi
 
-  log_debug "Generating passphrase with $PASSPHRASE_WORD_COUNT unique words."
-  
-  # Check if word list has enough unique potential words (considering case modification)
-  # This check is complex to do perfectly portably without knowing the final case.
-  # We'll rely on the retry mechanism, but add a safeguard.
-  local unique_word_count
-  unique_word_count=$(awk '{print $1}' "$WORD_LIST" | sort -u | wc -l) # Raw unique words
-  if (( unique_word_count < PASSPHRASE_WORD_COUNT )); then
-      echo "Warning: Dictionary might not contain enough unique words ($unique_word_count) for the requested count ($PASSPHRASE_WORD_COUNT), especially with case flags. Generation might be slow or fail." >&2
-      # Don't exit, let it try, but warn the user.
+  log_debug "Generating passphrase with $PASSPHRASE_WORD_COUNT unique words using batch method."
+
+  # Determine how many words to grab initially (oversample to increase unique chance)
+  local words_to_grab=$(( PASSPHRASE_WORD_COUNT * 3 ))
+  if (( words_to_grab < 20 )); then # Ensure we grab a reasonable minimum
+      words_to_grab=20
+  fi
+  log_debug "Attempting to grab $words_to_grab raw words initially."
+
+  local raw_words_list
+  if command -v shuf &> /dev/null; then
+      log_debug "Using shuf to get raw words."
+      # Handle potential errors from shuf
+      raw_words_list=$(shuf -n "$words_to_grab" "$WORD_LIST" 2>/dev/null)
+      if [[ $? -ne 0 || -z "$raw_words_list" ]]; then
+          log_debug "shuf failed or returned empty. Attempting awk fallback."
+          # Fall through to awk if shuf fails
+          raw_words_list=""
+      fi
   fi
 
-  local attempts=0
-  local max_attempts=$(( PASSPHRASE_WORD_COUNT * 100 )) # Safeguard against infinite loops
+  # Awk fallback (if shuf not found or failed)
+  if [[ -z "$raw_words_list" ]]; then
+      log_debug "Using awk fallback to get raw words (slower)."
+      # Awk method to get N random lines (less efficient than shuf)
+      # This is a common reservoir sampling algorithm for awk
+      raw_words_list=$(awk -v n="$words_to_grab" 'BEGIN{srand()} {if(NR<=n) {a[NR]=$0} else {r=int(rand()*NR)+1; if(r<=n) {a[r]=$0}}} END{for(i=1;i<=n;i++) print a[i]}' "$WORD_LIST" 2>/dev/null)
+       if [[ $? -ne 0 || -z "$raw_words_list" ]]; then
+           echo "Error: Failed to get words using shuf and awk fallback from '$WORD_LIST'." >&2
+           exit 1
+       fi
+  fi
 
-  words=() # Initialize the array
-  local word_count=0 # Initialize word counter
-  local chosen_words_marker=$'\n' # Use newline delimiters for unique matching
+  log_debug "Processing and filtering raw words..."
+  local processed_words
+  # Process lines: get first word, apply case mods, ensure uniqueness
+  processed_words=$(echo "$raw_words_list" | awk \
+    -v upper="$INCLUDE_UPPERCASE" -v lower="$INCLUDE_LOWERCASE" '
+    {
+      # Extract the first word from the line
+      word = $1
+      if (word == "") next # Skip empty lines/words
 
-  # Loop using the counter instead of array size check
-  while [[ $word_count -lt $PASSPHRASE_WORD_COUNT ]]; do
-    ((attempts++))
-    if (( attempts > max_attempts )); then
-        echo "Error: Exceeded maximum attempts ($max_attempts) to find unique words. Check dictionary or requested length." >&2
-        exit 1
-    fi
+      # Filter out words with non-alphabetic characters (e.g., apostrophes)
+      if (!match(word, /^[[:alpha:]]+$/)) next
 
-    local word
-    word=$(get_random_word)
-    # Handle potential empty lines or multi-word lines from dict
-    word=$(echo "$word" | awk '{print $1}')
-    if [[ -z "$word" ]]; then
-        log_debug "Got empty word, retrying..."
-        continue # Retry if we got an empty word
-    fi
+      # Apply case modification (variables passed via -v)
+      if (upper == "true") {
+        word = toupper(substr(word,1,1)) substr(word,2)
+      } else if (lower == "true") {
+        word = tolower(word)
+      }
 
-    # Apply case modification *first*
-    local modified_word="$word"
-    if [[ $INCLUDE_UPPERCASE == true ]]; then
-      modified_word=$(echo "$word" | awk '{print toupper(substr($0,1,1)) substr($0,2)}') # Portable capitalization
-    elif [[ $INCLUDE_LOWERCASE == true ]]; then
-      modified_word=$(echo "$word" | tr '[:upper:]' '[:lower:]') # Portable lowercase
-    fi
+      # Ensure uniqueness (case-sensitive after modification)
+      if (!seen[word]++) {
+        print word
+      }
+    }'
+  )
 
-    # Check if the *modified* word already exists using string matching
-    if [[ "$chosen_words_marker" == *$'
-'"$modified_word"$'
-'* ]]; then
-        log_debug "Modified word '$modified_word' (from raw '$word') already selected, retrying..."
-        continue # Retry if the modified form exists
-    fi
+  # Take the required number of unique words
+  local unique_words
+  unique_words=$(echo "$processed_words" | head -n "$PASSPHRASE_WORD_COUNT")
 
-    # If unique, add the modified word to the list and the marker string
-    words+=("$modified_word")
-    chosen_words_marker+="$modified_word"$'
-'
-    ((word_count++)) # Increment the counter
-    log_debug "Added unique modified word to list: $modified_word (Count: $word_count)"
-  done
+  # Check if we got enough unique words
+  local unique_count
+  unique_count=$(echo "$unique_words" | wc -w) # Count words
+
+  if (( unique_count < PASSPHRASE_WORD_COUNT )); then
+      echo "Error: Could not generate enough unique words ($unique_count found) for the requested count ($PASSPHRASE_WORD_COUNT)." >&2
+      echo "       Try reducing the count or checking the dictionary '$WORD_LIST'." >&2
+      exit 1
+  fi
+
+  log_debug "Successfully obtained $unique_count unique words."
+
+  # Format the result
+  local result
+  if [[ -z "$unique_words" ]]; then
+      echo "Error: Failed to obtain valid unique words after filtering." >&2
+      log_debug "Debug: unique_words variable was empty before paste operation."
+      exit 1
+  fi
+  # result=$(echo "$unique_words" | paste -sd '-') # Join words with hyphen
+  # Use awk for more robust joining across platforms
+  result=$(echo "$unique_words" | awk 'NR > 1 { printf "-" }; { printf "%s", $0 } END { print "" }')
 
   local number
-  number=$(printf "%02d" $((RANDOM % 100))) # Keep 2-digit number suffix
-  local result="" # Initialize result string
+  number=$(printf "%02d" $((RANDOM % 100)))
+  result+="-$number"
 
-  # Build the result string by iterating with the counter to avoid "${words[@]}"
-  local i
-  for (( i=0; i < word_count; i++ )); do
-      result+="${words[$i]}-"
-  done
-
-  # Append the final number (handles case where word_count is 0)
-  result+="$number"
-
-  printf "%s\n" "$result"
+  # Call copy BEFORE printing the result
   copy_to_clipboard "$result"
+  printf "%s\n" "$result"
 }
 
 # Generate API token with sk- prefix and custom byte length
 generate_api_token() {
-  log_debug "Generating API token with $API_TOKEN_BYTE_LENGTH random bytes."
-  local random_bytes
-  # Generate URL-safe base64 string from specified bytes
-  random_bytes=$(openssl rand -base64 "$API_TOKEN_BYTE_LENGTH" | tr -d '=' | tr '+/' '-_')
+  log_debug "Generating API token with length $API_TOKEN_BYTE_LENGTH containing only [A-Za-z0-9]."
+  local random_chars
+  # Generate enough Base64 random bytes to likely cover the desired length after filtering, then filter and truncate.
+  # We estimate needing roughly N bytes input for N alphanumeric characters output after filtering Base64. Add a buffer.
+  random_chars=$(openssl rand -base64 "$(( API_TOKEN_BYTE_LENGTH * 3 / 4 + 5 ))" | tr -dc 'A-Za-z0-9' | head -c "$API_TOKEN_BYTE_LENGTH")
 
-  local token="sk-${random_bytes}"
-  printf "%s\n" "$token"
+  # Check if we generated enough characters (unlikely to fail with the buffer, but good practice)
+  if [[ ${#random_chars} -lt $API_TOKEN_BYTE_LENGTH ]]; then
+      echo "Error: Could not generate enough random alphanumeric characters." >&2
+      log_debug "Needed $API_TOKEN_BYTE_LENGTH, got ${#random_chars}"
+      exit 1
+  fi
+
+  local token="sk-${random_chars}"
+  # Call copy BEFORE printing the result
   copy_to_clipboard "$token"
+  printf "%s\n" "$token"
 }
 
 # Generate a secure secret suitable for JWT signing (Base64 encoded)
@@ -209,8 +314,9 @@ generate_jwt_secret() {
   # Generate specified number of bytes and Base64 encode them
   secret=$(openssl rand -base64 "$JWT_SECRET_BYTE_LENGTH")
 
-  printf "%s\n" "$secret"
+  # Call copy BEFORE printing the result
   copy_to_clipboard "$secret"
+  printf "%s\n" "$secret"
 }
 
 # --- Argument Parsing ---
@@ -356,3 +462,4 @@ case "$COMMAND" in
 esac
 
 exit 0
+
