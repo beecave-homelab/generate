@@ -4,7 +4,7 @@ A Bash script that generates password strings, JWT tokens and API keys.
 
 ## Versions
 
-**Current version**: 0.2.0
+**Current version**: 0.2.1
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ A Bash script that generates password strings, JWT tokens and API keys.
 ## Badges
 
 ![Bash](https://img.shields.io/badge/language-Bash-blue)
-![Version](https://img.shields.io/badge/version-0.2.0-blue)
+![Version](https://img.shields.io/badge/version-0.2.1-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Installation
